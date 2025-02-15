@@ -1,0 +1,10 @@
+[package]
+name = "interview_rust_project"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# futures = "0.3"
+# nix = "0.29"
+libc = "0.2.169"
+crossbeam = "0.8.4"

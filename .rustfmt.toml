@@ -1,0 +1,4 @@
+
+max_width = 80 # 没办法,显示屏太小了
+imports_granularity = "Crate"
+group_imports="StdExternalCrate"
