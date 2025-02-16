@@ -1,27 +1,62 @@
-use std::{pin::Pin, sync::{atomic::AtomicUsize, mpsc::SyncSender}, task::Wake};
+use std::{
+    pin::Pin,
+    ptr::NonNull,
+    sync::{atomic::AtomicUsize, mpsc::SyncSender},
+    task::Wake,
+};
 
-struct Task {
-    id: ID,
-    ready_queue: SyncSender<ID>,
-    future: Pin<Box<dyn Future<Output = ()> + Send>>,
+use crossbeam::{channel::Sender, queue::SegQueue};
+
+pub struct Task<Output = ()> {
+    pub id: ID,
+    ready_queue: Sender<ID>,
+    pub future: Pin<Box<dyn Future<Output = Output> + Send>>,
 }
 
 impl Wake for Task {
     fn wake(self: std::sync::Arc<Self>) {
-        todo!()
+        self.ready_queue
+            .send(self.id)
+            .expect("panic: Wake for Task");
+    }
+}
+unsafe impl Send for Task {}
+
+pub type ID = usize;
+
+/// 唯一id管理者(分配,回收)
+pub struct IdManager {
+    /// id计数
+    count: AtomicUsize,
+    /// 回收的id
+    ///
+    /// #try: 当queue的长度为1时,表示以没有剩余的id,需取出最后的id,并且给queue分配 最后的id+1 的id
+    bin: SegQueue<ID>,
+}
+
+impl IdManager {
+    pub fn new() -> Self {
+        Self {
+            count: AtomicUsize::new(0),
+            bin: SegQueue::new(),
+        }
     }
 }
 
-type ID = usize;
-
-/// 唯一id管理者(分配,回收)
-struct IdManager{
-    /// id计数
-    count:AtomicUsize,
-    /// bin的索引,用来解决 IdManager::01#err
-    index:AtomicUsize,
-    /// 回收的id
-    /// 01#err: 无法保证,在多线程中,id被重复分配
-    bin:Vec<usize>
+/// id拥有者\
+/// 由id管理者分配,当id拥有者drop后,会自动将id回收到id管理者bin中
+pub struct IdOwner {
+    id: ID,
+    /// #wait: 也许一个是一个弱引用
+    ptr: NonNull<SegQueue<ID>>,
 }
-
+impl IdOwner {
+    pub fn id(&self) -> ID {
+        self.id
+    }
+}
+impl Drop for IdOwner {
+    fn drop(&mut self) {
+        todo!()
+    }
+}
