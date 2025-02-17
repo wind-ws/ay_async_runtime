@@ -1,4 +1,5 @@
 use std::{
+    marker::PhantomPinned,
     pin::Pin,
     ptr::NonNull,
     sync::{atomic::AtomicUsize, mpsc::SyncSender},
@@ -9,18 +10,41 @@ use crossbeam::{channel::Sender, queue::SegQueue};
 
 pub struct Task<Output = ()> {
     pub id: ID,
-    ready_queue: Sender<ID>,
     pub future: Pin<Box<dyn Future<Output = Output> + Send>>,
+
+    // _marker: PhantomPinned,
+}
+unsafe impl Send for Task {}
+unsafe impl Sync for Task {}
+
+impl<Output> Task<Output> {
+    pub fn new(
+        id: ID,
+        future: Pin<Box<dyn Future<Output = Output> + Send>>,
+    ) -> Self {
+        Self {
+            id,
+            future,
+            // _marker: PhantomPinned,
+        }
+    }
 }
 
-impl Wake for Task {
+pub struct TaskWaker {
+    pub id: ID,
+    pub queue_sender: Sender<ID>,
+}
+unsafe impl Send for TaskWaker {}
+unsafe impl Sync for TaskWaker {}
+
+impl Wake for TaskWaker {
     fn wake(self: std::sync::Arc<Self>) {
-        self.ready_queue
+        self.queue_sender
             .send(self.id)
             .expect("panic: Wake for Task");
     }
 }
-unsafe impl Send for Task {}
+
 
 pub type ID = usize;
 
