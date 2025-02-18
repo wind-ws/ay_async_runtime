@@ -5,6 +5,7 @@
 //! 
 //! fd: 文件描述符 是一个用于标识和访问文件或输入/输出资源（如文件、网络套接字、管道等）的一种整数值。它是操作系统用来管理和追踪进程中打开的文件或其他 I/O 资源的方式
 //! 
+//! libc::EINPROGRESS: 当你在非阻塞模式下执行 I/O 操作（如连接、读取或写入）时，如果操作无法立即完成，它将返回 EINPROGRESS
 use std::io;
 
 pub(crate) type EpollEvent = libc::epoll_event;
@@ -33,6 +34,15 @@ fn create1(){}
 /// 
 /// `fd` : 需要被添加、修改或删除的文件描述符\
 /// `event` : 指向epoll_event结构的指针，该结构用于指定需要监听的事件类型\
+/// 
+/// events:
+/// `EPOLLONESHOT`: 单次事件触发后自动从 epoll 中移除文件描述符
+/// `EPOLLIN`:  表示可读事件
+/// `EPOLLOUT`: 表示可写事件
+/// `EPOLLERR`: 表示错误事件
+/// `EPOLLHUP`: 表示挂起事件
+/// `EPOLLPRI`: 表示对应的文件描述符有紧急的数据可读（这里应该表示有带外数据到来）
+/// `EPOLLET`:  将EPOLL设为边缘触发(Edge Triggered)模式，这是相对于水平触发(Level Triggered)来说的
 pub(crate) fn ctl(
     epfd: i32,
     op: i32,
