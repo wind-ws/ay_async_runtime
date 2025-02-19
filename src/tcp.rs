@@ -207,6 +207,9 @@ mod test_tcp {
         task::Task,
     };
 
+    // 最高: 2138ms
+    // 最低: 1360ms
+    // 平均: 
     #[test]
     pub fn test_tcp() {
         println!("start:{}", NOW.elapsed().as_millis());

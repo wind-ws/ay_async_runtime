@@ -36,7 +36,6 @@ pub fn ay_main(attrs: RawTokenStream, item: RawTokenStream) -> RawTokenStream {
         }
     };
     
-
     let input_fn: ItemFn = match syn::parse2(item.clone()) {
         Ok(it) => it,
         Err(e) => {
@@ -68,6 +67,60 @@ pub fn ay_main(attrs: RawTokenStream, item: RawTokenStream) -> RawTokenStream {
     // 生成新的代码，将原函数修改为异步运行
     let expanded = quote::quote! {
          // 使用 Tokio 的运行时标记
+        fn #func_name() {
+            let mut executor = interview_rust_project::runtime::executor::Executor::new(#worker_threads, 500);
+            let future = async { #block };
+            let future = std::boxed::Box::pin(future);
+            let task = interview_rust_project::runtime::task::Task {
+                id: interview_rust_project::runtime::reactor::IdManager::INVALID_ID,
+                future: future,
+            };
+            executor.add_task(task);
+            executor.block();
+        }
+    };
+
+    expanded.into()
+}
+
+#[proc_macro_attribute]
+pub fn ay_test(attrs: RawTokenStream, item: RawTokenStream) -> RawTokenStream {
+    let attrs: TokenStream = attrs.into();
+    let mut item: TokenStream = item.into();
+    let attr: Args = match syn::parse2(attrs.clone()) {
+        Ok(it) => it,
+        Err(e) => {
+            item.extend(e.into_compile_error());
+            return item.into();
+        }
+    };
+    
+    let input_fn: ItemFn = match syn::parse2(item.clone()) {
+        Ok(it) => it,
+        Err(e) => {
+            item.extend(e.into_compile_error());
+            return item.into();
+        }
+    };
+
+    let func_name = &input_fn.sig.ident; // 函数名
+    let func_inputs = &input_fn.sig.inputs; // 函数输入参数
+    let func_output = &input_fn.sig.output; // 函数返回参数
+    let func_async = input_fn.sig.asyncness; // async声明
+    let block = &input_fn.block;
+    {
+        // 必须是 async
+        if func_async.is_none() {
+            return Error::new_spanned(func_name, "function must be async")
+                .to_compile_error()
+                .into();
+        }
+    }
+    let  worker_threads= attr.worker_threads;
+    // 生成新的代码，将原函数修改为异步运行
+    let expanded = quote::quote! {
+         // 使用 Tokio 的运行时标记
+        #[test]
         fn #func_name() {
             let mut executor = interview_rust_project::runtime::executor::Executor::new(#worker_threads, 500);
             let future = async { #block };

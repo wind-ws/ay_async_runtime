@@ -100,7 +100,7 @@ impl WokerThread {
                     // 接受外部的task
                     // 如果 A线程的receiver 会抢掉全部任务,
                     // 我们就需要限制每个线程每次最多接受的任务数量
-                    let recv_task_max = 3;
+                    let recv_task_max = 5;
                     let mut recv_count = 0;
                     while let Ok(mut task) = task_receiver.try_recv() {
                         let id = id_manager.get_id();
