@@ -82,7 +82,7 @@ use interview_rust_project::{
     runtime::executor::{Executor, NOW},
     tcp::AsyncTcpStream,
 };
-use proc_macro::{ay_main, ay_test};
+use proc_macro::ay_main;
 
 // 最高: 3313ms
 // 最低: 1438ms
@@ -94,7 +94,7 @@ async fn main() {
             let thread = thread::current();
             let mut stream =
                 AsyncTcpStream::connect("127.0.0.1:3000").await.unwrap();
-            let mut buf = [0;1028];
+            let mut buf = [0; 1028];
             buf[0] = i as u8;
             let n = stream.write(&buf[0..10]).await.unwrap();
             let n = stream.read(&mut buf[0..n]).await.unwrap();
@@ -110,30 +110,30 @@ async fn main() {
     }
 }
 
-#[ay_test(worker_threads = 10)]
-async fn a() {
-    for i in 0..10000 {
-        let future = async move {
-            let thread = thread::current();
-            let mut stream =
-                AsyncTcpStream::connect("127.0.0.1:3000").await.unwrap();
-            let mut buf = Vec::<u8>::with_capacity(2048);
-            for j in 0..10 {
-                buf.push(j);
-            }
-            buf[1] = i as u8;
-            let n = stream.write(&buf).await.unwrap();
-            unsafe { buf.set_len(n) };
-            let n = stream.read(&mut buf).await.unwrap();
+// #[ay_test(worker_threads = 10)]
+// async fn a() {
+//     for i in 0..10000 {
+//         let future = async move {
+//             let thread = thread::current();
+//             let mut stream =
+//                 AsyncTcpStream::connect("127.0.0.1:3000").await.unwrap();
+//             let mut buf = Vec::<u8>::with_capacity(2048);
+//             for j in 0..10 {
+//                 buf.push(j);
+//             }
+//             buf[1] = i as u8;
+//             let n = stream.write(&buf).await.unwrap();
+//             unsafe { buf.set_len(n) };
+//             let _n = stream.read(&mut buf).await.unwrap();
 
-            println!(
-                "{}[time:{}] read[{}]:{:?}",
-                thread.name().unwrap(),
-                NOW.elapsed().as_millis(),
-                i,
-                buf
-            );
-        };
-        Executor::spawn(future);
-    }
-}
+//             println!(
+//                 "{}[time:{}] read[{}]:{:?}",
+//                 thread.name().unwrap(),
+//                 NOW.elapsed().as_millis(),
+//                 i,
+//                 buf
+//             );
+//         };
+//         Executor::spawn(future);
+//     }
+// }

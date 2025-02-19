@@ -38,7 +38,7 @@ impl Reactor {
                 while let Ok(reg) = receiver.try_recv() {
                     let event_id = id_manager.get_id();
                     Reactor::register(
-                        fd.clone(),
+                        fd,
                         reg.events,
                         reg.interest_fd,
                         event_id,
@@ -51,21 +51,18 @@ impl Reactor {
                 for event_id in &epoll_events[0..n] {
                     let event_id = event_id.u64;
                     // println!("happen:{}", event_id);
-                    match map.remove(&event_id) {
-                        Some(reg) => {
-                            // println!("remove:{}", event_id);
+                    if let Some(reg) = map.remove(&event_id) {
+                        // println!("remove:{}", event_id);
 
-                            Reactor::unregister(
-                                fd.clone(),
-                                reg.events,
-                                reg.interest_fd,
-                                event_id,
-                            )
-                            .unwrap();
-                            reg.waker.wake();
-                            id_manager.recycle(event_id);
-                        }
-                        None => (),
+                        Reactor::unregister(
+                            fd,
+                            reg.events,
+                            reg.interest_fd,
+                            event_id,
+                        )
+                        .unwrap();
+                        reg.waker.wake();
+                        id_manager.recycle(event_id);
                     }
                 }
             }
@@ -111,6 +108,11 @@ impl Reactor {
 pub struct IdManager {
     count: ID,
     bin: Vec<ID>,
+}
+impl Default for IdManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl IdManager {
     pub const INVALID_ID: ID = ID::MAX;

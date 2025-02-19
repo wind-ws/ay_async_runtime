@@ -93,7 +93,7 @@ impl WokerThread {
                     task_receiver;
                 let (id_sender, id_receiver) = unbounded::<ID>();
                 // let amount = amount_;
-                let idle_dead_ms = idle_dead_ms.clone();
+                let idle_dead_ms = idle_dead_ms;
                 // 当前空闲时间(now-time_anchor)
                 let mut time_anchor = 0u128;
                 loop {
@@ -108,8 +108,8 @@ impl WokerThread {
                         task.id = id;
                         // 执行Future,Pending则放入map
                         let waker = Arc::new(task.waker(id_sender.clone()));
-                        let mut waker = Waker::from(waker);
-                        let mut cx = Context::from_waker(&mut waker);
+                        let waker = Waker::from(waker);
+                        let mut cx = Context::from_waker(&waker);
                         match task.future.as_mut().poll(&mut cx) {
                             std::task::Poll::Ready(_) => {}
                             std::task::Poll::Pending => {
@@ -128,8 +128,8 @@ impl WokerThread {
                     while let Ok(id) = id_receiver.try_recv() {
                         let task = map.get_mut(&id).unwrap();
                         let waker = Arc::new(task.waker(id_sender.clone()));
-                        let mut waker = Waker::from(waker);
-                        let mut cx = Context::from_waker(&mut waker);
+                        let waker = Waker::from(waker);
+                        let mut cx = Context::from_waker(&waker);
                         match task.future.as_mut().poll(&mut cx) {
                             std::task::Poll::Ready(_) => {
                                 // 移除 map的 task ,和id回收

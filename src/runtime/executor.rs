@@ -13,7 +13,7 @@
 // 在执行Future poll函数中,若返回Pending,要在之前将waker注册进入Reactor(waker被clone),
 // 且你需要分配id,为epoll event所用
 
-use std::{future, pin::Pin, process::Output, time::Instant};
+use std::{pin::Pin, time::Instant};
 
 use crossbeam::channel::Sender;
 use lazy_static::lazy_static;
@@ -51,9 +51,9 @@ impl Executor {
     pub fn add_task(&self, task: Task) {
         self.thread_pool.add_task(task);
     }
-    pub fn add_woker(&self, idea_dead_ms: u64) {
+    pub fn add_woker(&mut self, idea_dead_ms: u64) {
         if !self.block {
-            self.add_woker(idea_dead_ms);
+            self.thread_pool.add_woker(idea_dead_ms);
         }
     }
     /// 堵塞,直到所有任务执行完毕
@@ -67,7 +67,7 @@ impl Executor {
             }
             let b = &self.thread_pool.woker[n].thread.is_finished();
             if *b {
-                n = n + 1;
+                n += 1;
             }
         }
     }
@@ -82,10 +82,12 @@ impl Executor {
         let future = Box::pin(future);
         let task = Task {
             id: IdManager::INVALID_ID,
-            future: future,
+            future,
         };
         #[allow(static_mut_refs)]
-        unsafe { TASK_SENDER.as_ref().unwrap().send(task).unwrap() };
+        unsafe {
+            TASK_SENDER.as_ref().unwrap().send(task).unwrap()
+        };
     }
 }
 
