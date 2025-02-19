@@ -2,7 +2,7 @@ use std::task::Wake;
 
 use crossbeam::channel::Sender;
 
-use super::executor::{MyFuture, ID};
+use super::executor::{ID, MyFuture};
 
 /// #done
 pub struct Task {

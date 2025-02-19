@@ -16,7 +16,7 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 use crate::runtime::{executor::REACTOR, reactor::ReactorRegister};
 
-struct AsyncTcpStream {
+pub struct AsyncTcpStream {
     inner: TcpStream,
 }
 
@@ -157,7 +157,7 @@ impl Future for WriteTcpStreamFuture<'_> {
     }
 }
 
-struct Sleep {
+pub struct Sleep {
     duration: Duration,
     completed: Arc<AtomicBool>,
     // 保证线程只运行一次
@@ -199,7 +199,6 @@ impl Future for Sleep {
 
 #[cfg(test)]
 mod test_tcp {
-    use std::time::Duration;
 
     use super::*;
     use crate::runtime::{
@@ -210,8 +209,9 @@ mod test_tcp {
 
     #[test]
     pub fn test_tcp() {
+        println!("start:{}", NOW.elapsed().as_millis());
         let mut executor = Executor::new(10, 500);
-        for i in 0..1000 {
+        for i in 0..10000 {
             let future = async move {
                 let thread = thread::current();
                 let mut stream =
@@ -224,15 +224,14 @@ mod test_tcp {
                 let n = stream.write(&buf).await.unwrap();
                 unsafe { buf.set_len(n) };
                 let n = stream.read(&mut buf).await.unwrap();
-                unsafe { buf.set_len(n) };
-                
-                println!(
-                    "{}[time:{}] read[{}]:{:?}",
-                    thread.name().unwrap(),
-                    NOW.elapsed().as_millis(),
-                    i,
-                    buf
-                );
+
+                // println!(
+                //     "{}[time:{}] read[{}]:{:?}",
+                //     thread.name().unwrap(),
+                //     NOW.elapsed().as_millis(),
+                //     i,
+                //     buf
+                // );
             };
             let future = Box::pin(future);
             let task = Task {
@@ -242,5 +241,6 @@ mod test_tcp {
             executor.add_task(task);
         }
         executor.block();
+        println!("done:{}", NOW.elapsed().as_millis() - 500);
     }
 }

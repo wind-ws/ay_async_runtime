@@ -1,17 +1,17 @@
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU32, AtomicUsize},
-    },
+    sync::Arc,
     task::{Context, Waker},
     thread,
-    time::Duration,
 };
 
 use crossbeam::channel::{Receiver, Sender, unbounded};
 use fxhash::FxHashMap;
 
-use super::{executor::ID, reactor::IdManager, task::Task};
+use super::{
+    executor::{ID, NOW, TASK_SENDER},
+    reactor::IdManager,
+    task::Task,
+};
 
 /// 只管理线程,不管理任务
 pub struct ThreadPool {
@@ -24,7 +24,7 @@ impl ThreadPool {
     pub fn new(n: usize, idea_dead_ms: u64) -> Self {
         let mut woker = Vec::with_capacity(n);
         let (task_sender, task_receiver) = unbounded();
-
+        unsafe { TASK_SENDER = Some(task_sender.clone()) };
         for i in 0..n {
             woker.push(WokerThread::new(
                 i as u64,
@@ -65,8 +65,8 @@ pub struct WokerThread {
     pub thread_id: ID,
     // pub task_sender: Sender<Task>,
     pub thread: thread::JoinHandle<()>,
-    /// 当前任务数量 (并非完全精准,只会在一批操作后更新任务数量)
-    pub amount: Arc<AtomicUsize>,
+    // /// 当前任务数量 (并非完全精准,只会在一批操作后更新任务数量)
+    // pub amount: Arc<AtomicUsize>,
     // /// true:强制停止当前工作线程
     // stop:AtomicBool,
     /// 线程空闲 死亡时间
@@ -82,8 +82,8 @@ impl WokerThread {
         // let (sender, receiver) = unbounded();
         let builder =
             thread::Builder::new().name(format!("work_thread[{}]", id));
-        let amount = Arc::new(AtomicUsize::new(0));
-        let amount_ = amount.clone();
+        // let amount = Arc::new(AtomicUsize::new(0));
+        // let amount_ = amount.clone();
         let thread = builder
             .spawn(move || {
                 let mut map = FxHashMap::<ID, Task>::default();
@@ -92,16 +92,16 @@ impl WokerThread {
                 let task_receiver: crossbeam::channel::Receiver<Task> =
                     task_receiver;
                 let (id_sender, id_receiver) = unbounded::<ID>();
-                let amount = amount_;
+                // let amount = amount_;
                 let idle_dead_ms = idle_dead_ms.clone();
-                // 当前空闲时间
-                let mut idle_ms = 0u64;
-                // 每次空闲后 的休息时间 (idle_dead_ms不能低于 STEP)
-                const STEP: u64 = 5;
+                // 当前空闲时间(now-time_anchor)
+                let mut time_anchor = 0u128;
                 loop {
                     // 接受外部的task
                     // 如果 A线程的receiver 会抢掉全部任务,
                     // 我们就需要限制每个线程每次最多接受的任务数量
+                    let recv_task_max = 3;
+                    let mut recv_count = 0;
                     while let Ok(mut task) = task_receiver.try_recv() {
                         let id = id_manager.get_id();
                         // id由线程内部管理,无论如何都需要改变它
@@ -117,9 +117,13 @@ impl WokerThread {
                                 map.insert(task.id, task);
                             }
                         }
+                        recv_count += 1;
+                        if recv_count == recv_task_max {
+                            break;
+                        }
                     }
-                    amount
-                        .store(map.len(), std::sync::atomic::Ordering::SeqCst);
+                    // amount
+                    //     .store(map.len(), std::sync::atomic::Ordering::SeqCst);
                     // 执行Future
                     while let Ok(id) = id_receiver.try_recv() {
                         let task = map.get_mut(&id).unwrap();
@@ -136,16 +140,18 @@ impl WokerThread {
                     }
                     // 任务数量
                     let a = task_receiver.len() + map.len();
-                    amount.store(a, std::sync::atomic::Ordering::SeqCst);
+                    // amount.store(a, std::sync::atomic::Ordering::SeqCst);
                     // true:空闲
                     if a == 0 {
-                        thread::sleep(Duration::from_millis(STEP));
-                        idle_ms += STEP;
-                        if idle_ms > idle_dead_ms {
+                        let now = NOW.elapsed().as_millis();
+                        if time_anchor == 0 {
+                            time_anchor = now;
+                        }
+                        if now - time_anchor >= idle_dead_ms.into() {
                             break;
                         }
                     } else {
-                        idle_ms = 0;
+                        time_anchor = 0;
                     }
                 }
             })
@@ -154,7 +160,7 @@ impl WokerThread {
             thread_id: id,
             // task_sender: sender,
             thread,
-            amount,
+            // amount,
             // stop: AtomicBool::new(false),
             idle_dead_ms,
         }

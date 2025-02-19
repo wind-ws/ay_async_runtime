@@ -13,11 +13,16 @@
 // 在执行Future poll函数中,若返回Pending,要在之前将waker注册进入Reactor(waker被clone),
 // 且你需要分配id,为epoll event所用
 
-use std::{pin::Pin, thread, time::Instant};
+use std::{future, pin::Pin, process::Output, time::Instant};
 
+use crossbeam::channel::Sender;
 use lazy_static::lazy_static;
 
-use super::{pool::ThreadPool, reactor::Reactor, task::Task};
+use super::{
+    pool::ThreadPool,
+    reactor::{IdManager, Reactor},
+    task::Task,
+};
 
 pub type MyFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub type ID = u64;
@@ -26,6 +31,9 @@ lazy_static! {
     pub static ref REACTOR: Reactor = Reactor::new();
     pub static ref NOW: Instant = Instant::now();
 }
+/// 无锁吹发落如叶,鬼魅寻法无仙答.
+/// 梦中悟得解君愁,不得已全局变量.
+pub static mut TASK_SENDER: Option<Sender<Task>> = None;
 
 /// 分配任务 给其他线程
 pub struct Executor {
@@ -62,6 +70,22 @@ impl Executor {
                 n = n + 1;
             }
         }
+    }
+
+    /// 堵塞一个future,并且获得返回值
+    pub fn block_on(&self) {}
+
+    pub fn spawn<F>(future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let future = Box::pin(future);
+        let task = Task {
+            id: IdManager::INVALID_ID,
+            future: future,
+        };
+        #[allow(static_mut_refs)]
+        unsafe { TASK_SENDER.as_ref().unwrap().send(task).unwrap() };
     }
 }
 

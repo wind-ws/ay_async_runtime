@@ -1,11 +1,10 @@
 use std::{io, os::fd::RawFd, task::Waker, thread};
 
-use crossbeam::channel::{unbounded, Sender};
+use crossbeam::channel::{Sender, unbounded};
 use fxhash::FxHashMap;
 
-use crate::epoll::{self, EpollEvent};
-
 use super::executor::ID;
+use crate::epoll::{self, EpollEvent};
 
 /// #done
 /// #rename
