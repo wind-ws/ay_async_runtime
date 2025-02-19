@@ -1,161 +1,68 @@
-//! 用户构造出的 Future最终需要提交到 Executor中执行
+// Executor 收到Future,将Future发送给线程池
+// 线程池 接受 Future ,
+// 并且将Future分配到 A线程中(合理分配任务,拒绝线程之间的任务窃取(有时间在搞吧)),
+// A线程管理Future,
+// 为Future分配A线程唯一id,将Future存入hashmap<id,future>
+// 且将Future id放入执行队列(进行首次调用),
+// 当A线程调用Future poll ,
+// Ready则消耗Future和id,
+// Pending时 将Future保存到hashmap中,等待waker调用
+//
+// waker包含id和sender,用于将id再次发送到 A线程的执行队列,
+// 一般 waker由 Reactor的epoll调用,
+// 在执行Future poll函数中,若返回Pending,要在之前将waker注册进入Reactor(waker被clone),
+// 且你需要分配id,为epoll event所用
 
-use std::{
-    cell::UnsafeCell,
-    pin::Pin,
-    ptr::NonNull,
-    sync::{Arc, atomic::AtomicPtr},
-    task::{Context, Waker},
-    thread,
-};
+use std::{pin::Pin, thread, time::Instant};
 
-use crossbeam::{
-    atomic::AtomicCell,
-    channel::{Receiver, Sender, unbounded},
-    queue::SegQueue,
-};
+use lazy_static::lazy_static;
 
-use super::{
-    pool::{Config, State, ThreadPool},
-    reactor::Reactor,
-    task::{ID, IdManager, Task, TaskWaker},
-};
-use crate::ptr::{OwningPtr, PtrMut};
+use super::{pool::ThreadPool, reactor::Reactor, task::Task};
 
-// 要满足在线程池中运行多个Future
-/// 负责执行Future
-struct Executor {
-    /// 被执行Future队列
-    queue_receiver: Receiver<ID>,
+pub type MyFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+pub type ID = u64;
 
-    queue_sender: Sender<ID>,
-
-    /// 线程池
-    thread_pool: ThreadPool,
-    /// 反应机
-    reactor: Reactor,
-    /// id管理者
-    id_manager: IdManager,
-    /// 对应下标,由唯一id分配
-    ///
-    /// 由于id唯一,且独立,可以安全的操控对应下标的Task
-    ///
-    future_list: Vec<Pin<Box<Task>>>,
-
-    waker_list: Vec<TaskWaker>,
+lazy_static! {
+    pub static ref REACTOR: Reactor = Reactor::new();
+    pub static ref NOW: Instant = Instant::now();
 }
 
+/// 分配任务 给其他线程
+pub struct Executor {
+    thread_pool: ThreadPool,
+    /// 进入block状态
+    block: bool,
+}
 impl Executor {
-    pub fn new() -> Self {
-        let (sender, receiver) = unbounded::<ID>();
-        let thread_pool =
-            ThreadPool::new(State::new(), Config::new(10, 500, 99999), 5);
-        let future_list = Vec::new();
-        let waker_list = Vec::new();
-        let id_manager = IdManager::new();
-        let reactor = Reactor::new(sender.clone());
-        let executor = Self {
-            queue_receiver: receiver.clone(),
-            queue_sender: sender,
-            thread_pool,
-            reactor,
-            id_manager,
-            future_list,
-            waker_list,
-        };
-
-        executor
+    pub fn new(n: usize, idea_dead_ms: u64) -> Self {
+        Self {
+            thread_pool: ThreadPool::new(n, idea_dead_ms),
+            block: false,
+        }
     }
-
-    /// 启动executor
-    pub fn run(&mut self) {
+    pub fn add_task(&self, task: Task) {
+        self.thread_pool.add_task(task);
+    }
+    pub fn add_woker(&self, idea_dead_ms: u64) {
+        if !self.block {
+            self.add_woker(idea_dead_ms);
+        }
+    }
+    /// 堵塞,直到所有任务执行完毕
+    pub fn block(&mut self) {
+        self.block = true;
+        let mut n = 0;
+        let len = self.thread_pool.woker.len();
         loop {
-            match self.queue_receiver.recv() {
-                Ok(id) => {
-                    let ptr = self.future_list.get_mut(id).unwrap();
-                    // let ptr = ptr as *mut Pin<Box<Task>>;
-
-                    // let ptr = AtomicPtr::new(ptr);
-                    let res = self.thread_pool.execute(move || {
-                        //.
-                    });
-                }
-                // 依照对应的 err ,做对应的处理
-                _ => (),
+            if n == len {
+                break;
+            }
+            let b = &self.thread_pool.woker[n].thread.is_finished();
+            if *b {
+                n = n + 1;
             }
         }
     }
-
-    /// #talk : task 是Task 还是Future呢
-    pub fn on_block(&mut self, task: ()) {}
 }
 
-// executor 用线程池执行 future,
-// 若 future pending ,则将 waker 放进reactor
-//      注意,这个Future需要自行实现(将epoll中注册带有id的event,epoll会响应reactor,后reactor将id放入执行队列)
-// 若 ready,则直接返回数据
-//
-// reactor 通过epoll监控,当future可被执行event发生后,将future的waker执行 通知executor去执行它
-//
-// waker用来告诉 executor, future可以被再次执行了
-
-#[cfg(test)]
-mod tests_executor {
-    use std::{
-        cell::UnsafeCell,
-        collections::HashMap,
-        future,
-        ops::DerefMut,
-        pin::{pin, Pin},
-        sync::atomic::AtomicPtr,
-        task::{Context, Waker},
-        thread,
-    };
-
-    use crossbeam::epoch::{self, Atomic};
-
-    use crate::runtime::task::Task;
-
-    #[test]
-    fn test() {
-        let mut list: Vec<Task> = Vec::new();
-        let mut map = HashMap::<usize, usize>::new();
-        for i in 0..100 {
-            let future = async move {
-                println!("{}", i);
-            };
-            let task = Task::new(i, Box::pin(future));
-            // let task = Box::pin(task);
-            // map.insert(i, &task as *const Task  as usize);
-            list.push(task);
-            let ptr = list.get_mut(i).unwrap().future.as_mut();
-            // let ptr = ptr as *const u8;
-            // let ptr = unsafe { ptr.as_mut().unwrap().deref_mut() };
-
-            // let ptr = AtomicPtr::new(ptr);
-            // let task = ptr.load(std::sync::atomic::Ordering::Relaxed);
-            // let task = unsafe { &mut *task };
-            // println!("{}", task.id);
-        }
-    }
-    #[test]
-    fn test2() {
-        // let future = async move {
-        //     println!("abc{}", 0);
-        // };
-        // let mut future = Box::new(future);
-        // let mut future = Atomic::new(pin!(future));
-        // thread::spawn(move || {
-        //     let epoch = epoch::pin();
-        //     let mut cx = Context::from_waker(Waker::noop());
-        //     future.load(std::sync::atomic::Ordering::Relaxed, &epoch);
-
-        //     // unsafe {
-        //     //     let a =(ptr.as_mut().unwrap());
-        //     //     let a =Pin::new(a);
-        //     //     a.poll(cx);
-        //     // }
-            
-        // });
-    }
-}
+mod test_executor3 {}

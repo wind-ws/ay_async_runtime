@@ -1,53 +1,137 @@
-//! 在 Future执行过程中无法推进需要等待时，需要将 Executor提供的 Waker注册在 Reactor上,
-//! Reactor负责监听 Future是否Ready,
-//! 如果Ready，则通过 Waker通知 Executor继续执行对应的 Future
+use std::{io, os::fd::RawFd, task::Waker, thread};
 
-use std::{cell::UnsafeCell, io, os::fd::RawFd, sync::Arc, thread};
+use crossbeam::channel::{unbounded, Sender};
+use fxhash::FxHashMap;
 
-use crossbeam::channel::Sender;
+use crate::epoll::{self, EpollEvent};
 
-use super::task::{ID, Task};
+use super::executor::ID;
 
+/// #done
+/// #rename
+pub struct ReactorRegister {
+    pub interest_fd: RawFd,
+    pub events: u32,
+    pub waker: Waker,
+}
+
+/// #done
 pub struct Reactor {
-    // /// 将task 发送给 executor
-    // ///
-    // /// id通过epoll event 获得
-    // ready_queue: Sender<ID>,
-
-    // /// 用于调用wake
-    // future_list: Arc<Vec<UnsafeCell<Option<Task>>>>,
-    // #wait: 也许Reactor需要一个单独的线程去监听Event
-    thread: std::thread::JoinHandle<()>,
+    fd: RawFd,
+    pub sender: Sender<ReactorRegister>,
+    thread: thread::JoinHandle<()>,
 }
 impl Reactor {
-    pub fn new(ready_queue: Sender<ID>) -> Self {
-        let thread = thread::spawn(move|| {
-            // future_list;
-            // ...
-        });
-        Self { thread }
-    }
-}
+    pub fn new() -> Self {
+        let fd = epoll::create().unwrap();
+        let (sender, receiver) = unbounded::<ReactorRegister>();
+        let thread = thread::spawn(move || {
+            let mut epoll_events: Vec<EpollEvent> = Vec::with_capacity(1024);
+            let mut map = FxHashMap::<u64, ReactorRegister>::default();
+            let mut id_manager = IdManager::new();
+            loop {
+                // epoll_events.clear();
+                let n = epoll::wait(fd, &mut epoll_events, 1024, 0).unwrap();
+                let n = n as usize;
+                unsafe { epoll_events.set_len(n) };
+                // 来自Future poll函数
+                // 接受事件,并注册到epoll
+                while let Ok(reg) = receiver.try_recv() {
+                    let event_id = id_manager.get_id();
+                    Reactor::register(
+                        fd.clone(),
+                        reg.events,
+                        reg.interest_fd,
+                        event_id,
+                    )
+                    .unwrap();
+                    // println!("insert:{}", event_id);
+                    map.insert(event_id, reg);
+                }
+                // 被触发的事件id
+                for event_id in &epoll_events[0..n] {
+                    let event_id = event_id.u64;
+                    // println!("happen:{}", event_id);
+                    match map.remove(&event_id) {
+                        Some(reg) => {
+                            // println!("remove:{}", event_id);
 
-/// fd拥有者\
-/// 用于创建和销毁epoll实例
-struct FdOwner {
-    fd: RawFd,
-}
-impl FdOwner {
-    pub fn new() -> io::Result<Self> {
-        match crate::epoll::create() {
-            Ok(fd) => Ok(FdOwner { fd }),
+                            Reactor::unregister(
+                                fd.clone(),
+                                reg.events,
+                                reg.interest_fd,
+                                event_id,
+                            )
+                            .unwrap();
+                            reg.waker.wake();
+                            id_manager.recycle(event_id);
+                        }
+                        None => (),
+                    }
+                }
+            }
+        });
+        Self { fd, sender, thread }
+    }
+
+    pub fn register(
+        fd: RawFd,
+        events: u32,
+        interest_fd: RawFd,
+        id: u64,
+    ) -> io::Result<()> {
+        let mut event = EpollEvent { events, u64: id };
+        match epoll::ctl(fd, libc::EPOLL_CTL_ADD, interest_fd, &mut event) {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                epoll::ctl(fd, libc::EPOLL_CTL_MOD, interest_fd, &mut event)
+            }
             Err(e) => Err(e),
         }
     }
-}
-impl Drop for FdOwner {
-    fn drop(&mut self) {
-        crate::epoll::close(self.fd).unwrap();
+
+    pub fn unregister(
+        fd: RawFd,
+        events: u32,
+        interest_fd: RawFd,
+        id: u64,
+    ) -> io::Result<()> {
+        let mut event = EpollEvent { events, u64: id };
+        match epoll::ctl(fd, libc::EPOLL_CTL_DEL, interest_fd, &mut event) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn register_event(&self, event: ReactorRegister) {
+        self.sender.send(event).unwrap();
     }
 }
-/// fd使用者
-struct FdUser {
-    fd: FdOwner,
+
+/// #done
+pub struct IdManager {
+    count: ID,
+    bin: Vec<ID>,
+}
+impl IdManager {
+    pub const INVALID_ID: ID = ID::MAX;
+    pub fn new() -> Self {
+        Self {
+            count: 0,
+            bin: Vec::new(),
+        }
+    }
+    pub fn get_id(&mut self) -> ID {
+        match self.bin.pop() {
+            Some(id) => id,
+            None => {
+                let id = self.count;
+                self.count += 1;
+                id
+            }
+        }
+    }
+    pub fn recycle(&mut self, id: ID) {
+        self.bin.push(id);
+    }
 }
